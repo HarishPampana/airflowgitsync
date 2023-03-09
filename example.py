@@ -1,22 +1,50 @@
-import snscrape.modules.twitter as sntwitter
-import pandas as pd
-from transform import transform_data
+from __future__ import print_function
+from builtins import range
+from airflow.operators import PythonOperator
+from airflow.models import DAG
+from datetime import datetime, timedelta
+
+import time
+from pprint import pprint
+
+seven_days_ago = datetime.combine(
+        datetime.today() - timedelta(7), datetime.min.time())
+
+args = {
+    'owner': 'airflow',
+    'start_date': seven_days_ago,
+}
+
+dag = DAG(
+    dag_id='example_python_operator', default_args=args,
+    schedule_interval=None)
 
 
-# Creating list to append tweet data to
-def extract_data():
-  
-    # scrape tweets and append to a list
-  for i,tweet in enumerate(sntwitter.TwitterSearchScraper('Chatham House since:2023-01-14').get_items()):
-    if i>1000:
-      break
-    tweets_list.append([tweet.date, tweet.user.username, tweet.rawContent, 
-                          tweet.sourceLabel,tweet.user.location
-                          ])
-  
-      # convert tweets into a dataframe
-  tweets_df = pd.DataFrame(tweets_list, columns=['datetime', 'username', 'text', 'source', 'location'])
+def my_sleeping_function(random_base):
+    '''This is a function that will run within the DAG execution'''
+    time.sleep(random_base)
 
-      # save tweets as csv file
-  
-  transform_data(tweets_df)
+
+def print_context(ds, **kwargs):
+    pprint(kwargs)
+    print(ds)
+    return 'Whatever you return gets printed in the logs'
+
+run_this = PythonOperator(
+    task_id='print_the_context',
+    provide_context=True,
+    python_callable=print_context,
+    dag=dag)
+
+for i in range(10):
+    '''
+    Generating 10 sleeping task, sleeping from 0 to 9 seconds
+    respectively
+    '''
+    task = PythonOperator(
+        task_id='sleep_for_'+str(i),
+        python_callable=my_sleeping_function,
+        op_kwargs={'random_base': float(i)/10},
+        dag=dag)
+
+    task.set_upstream(run_this)
