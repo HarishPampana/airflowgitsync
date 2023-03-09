@@ -1,115 +1,159 @@
+#
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+"""
+Example DAG demonstrating the usage of the TaskFlow API to execute Python functions natively and within a
+virtual environment.
+"""
 from __future__ import annotations
 
- 
-
-import datetime
-
- 
+import logging
+import shutil
+import sys
+import tempfile
+import time
+from pprint import pprint
 
 import pendulum
 
- 
-
 from airflow import DAG
+from airflow.decorators import task
+from airflow.operators.python import ExternalPythonOperator, PythonVirtualenvOperator
 
-from airflow.operators.bash import BashOperator
+[docs]log = logging.getLogger(__name__)
 
-from airflow.operators.empty import EmptyOperator
+[docs]PATH_TO_PYTHON_BINARY = sys.executable
 
- 
+[docs]BASE_DIR = tempfile.gettempdir()
+
+
+[docs]def x():
+    pass
+
 
 with DAG(
-
-    dag_id="example_bash_operator",
-
-    schedule="0 0 * * *",
-
+    dag_id="example_python_operator",
+    schedule=None,
     start_date=pendulum.datetime(2021, 1, 1, tz="UTC"),
-
     catchup=False,
-
-    dagrun_timeout=datetime.timedelta(minutes=60),
-
-    tags=["example", "example2"],
-
-    params={"example_key": "example_value"},
-
+    tags=["example"],
 ) as dag:
 
-    run_this_last = EmptyOperator(
+    # [START howto_operator_python]
+    @task(task_id="print_the_context")
+[docs]    def print_context(ds=None, **kwargs):
+        """Print the Airflow context and ds variable from the context."""
+        pprint(kwargs)
+        print(ds)
+        return "Whatever you return gets printed in the logs"
 
-        task_id="run_this_last",
+    run_this = print_context()
+    # [END howto_operator_python]
 
-    )
+    # [START howto_operator_python_render_sql]
+    @task(task_id="log_sql_query", templates_dict={"query": "sql/sample.sql"}, templates_exts=[".sql"])
+    def log_sql(**kwargs):
+        logging.info("Python task decorator query: %s", str(kwargs["templates_dict"]["query"]))
 
- 
+    log_the_sql = log_sql()
+    # [END howto_operator_python_render_sql]
 
-    # [START howto_operator_bash]
+    # [START howto_operator_python_kwargs]
+    # Generate 5 sleeping tasks, sleeping from 0.0 to 0.4 seconds respectively
+    for i in range(5):
 
-    run_this = BashOperator(
+        @task(task_id=f"sleep_for_{i}")
+        def my_sleeping_function(random_base):
+            """This is a function that will run within the DAG execution"""
+            time.sleep(random_base)
 
-        task_id="run_after_loop",
+        sleeping_task = my_sleeping_function(random_base=float(i) / 10)
 
-        bash_command="echo 1",
+        run_this >> log_the_sql >> sleeping_task
+    # [END howto_operator_python_kwargs]
 
-    )
-
-    # [END howto_operator_bash]
-
- 
-
-    run_this >> run_this_last
-
- 
-
-    for i in range(3):
-
-        task = BashOperator(
-
-            task_id="runme_" + str(i),
-
-            bash_command='echo "{{ task_instance_key_str }}" && sleep 1',
-
+    if not shutil.which("virtualenv"):
+        log.warning("The virtalenv_python example task requires virtualenv, please install it.")
+    else:
+        # [START howto_operator_python_venv]
+        @task.virtualenv(
+            task_id="virtualenv_python", requirements=["colorama==0.4.0"], system_site_packages=False
         )
+        def callable_virtualenv():
+            """
+            Example function that will be performed in a virtual environment.
 
-        task >> run_this
+            Importing at the module level ensures that it will not attempt to import the
+            library before it is installed.
+            """
+            from time import sleep
 
- 
+            from colorama import Back, Fore, Style
 
-    # [START howto_operator_bash_template]
+            print(Fore.RED + "some red text")
+            print(Back.GREEN + "and with a green background")
+            print(Style.DIM + "and in dim text")
+            print(Style.RESET_ALL)
+            for _ in range(4):
+                print(Style.DIM + "Please wait...", flush=True)
+                sleep(1)
+            print("Finished")
 
-    also_run_this = BashOperator(
+        virtualenv_task = callable_virtualenv()
+        # [END howto_operator_python_venv]
 
-        task_id="also_run_this",
+        sleeping_task >> virtualenv_task
 
-        bash_command='echo "ti_key={{ task_instance_key_str }}"',
+        # [START howto_operator_external_python]
+        @task.external_python(task_id="external_python", python=PATH_TO_PYTHON_BINARY)
+        def callable_external_python():
+            """
+            Example function that will be performed in a virtual environment.
 
-    )
+            Importing at the module level ensures that it will not attempt to import the
+            library before it is installed.
+            """
+            import sys
+            from time import sleep
 
-    # [END howto_operator_bash_template]
+            print(f"Running task via {sys.executable}")
+            print("Sleeping")
+            for _ in range(4):
+                print("Please wait...", flush=True)
+                sleep(1)
+            print("Finished")
 
-    also_run_this >> run_this_last
+        external_python_task = callable_external_python()
+        # [END howto_operator_external_python]
 
- 
+        # [START howto_operator_external_python_classic]
+        external_classic = ExternalPythonOperator(
+            task_id="external_python_classic",
+            python=PATH_TO_PYTHON_BINARY,
+            python_callable=x,
+        )
+        # [END howto_operator_external_python_classic]
 
-# [START howto_operator_bash_skip]
+        # [START howto_operator_python_venv_classic]
+        virtual_classic = PythonVirtualenvOperator(
+            task_id="virtualenv_classic",
+            requirements="colorama==0.4.0",
+            python_callable=x,
+        )
+        # [END howto_operator_python_venv_classic]
 
-this_will_skip = BashOperator(
-
-    task_id="this_will_skip",
-
-    bash_command='echo "hello world"; exit 99;',
-
-    dag=dag,
-
-)
-
-# [END howto_operator_bash_skip]
-
-this_will_skip >> run_this_last
-
- 
-
-if __name__ == "__main__":
-
-    dag.test()
+        run_this >> external_classic >> external_python_task >> virtual_classic
