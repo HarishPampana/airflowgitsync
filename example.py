@@ -1,50 +1,115 @@
-from __future__ import print_function
-from builtins import range
-from airflow.operators import PythonOperator
-from airflow.models import DAG
-from datetime import datetime, timedelta
+from __future__ import annotations
 
-import time
-from pprint import pprint
+ 
 
-seven_days_ago = datetime.combine(
-        datetime.today() - timedelta(7), datetime.min.time())
+import datetime
 
-args = {
-    'owner': 'airflow',
-    'start_date': seven_days_ago,
-}
+ 
 
-dag = DAG(
-    dag_id='example_python_operator', default_args=args,
-    schedule_interval=None)
+import pendulum
 
+ 
 
-def my_sleeping_function(random_base):
-    '''This is a function that will run within the DAG execution'''
-    time.sleep(random_base)
+from airflow import DAG
 
+from airflow.operators.bash import BashOperator
 
-def print_context(ds, **kwargs):
-    pprint(kwargs)
-    print(ds)
-    return 'Whatever you return gets printed in the logs'
+from airflow.operators.empty import EmptyOperator
 
-run_this = PythonOperator(
-    task_id='print_the_context',
-    provide_context=True,
-    python_callable=print_context,
-    dag=dag)
+ 
 
-for i in range(10):
-    '''
-    Generating 10 sleeping task, sleeping from 0 to 9 seconds
-    respectively
-    '''
-    task = PythonOperator(
-        task_id='sleep_for_'+str(i),
-        python_callable=my_sleeping_function,
-        op_kwargs={'random_base': float(i)/10},
-        dag=dag)
+with DAG(
 
-    task.set_upstream(run_this)
+    dag_id="example_bash_operator",
+
+    schedule="0 0 * * *",
+
+    start_date=pendulum.datetime(2021, 1, 1, tz="UTC"),
+
+    catchup=False,
+
+    dagrun_timeout=datetime.timedelta(minutes=60),
+
+    tags=["example", "example2"],
+
+    params={"example_key": "example_value"},
+
+) as dag:
+
+    run_this_last = EmptyOperator(
+
+        task_id="run_this_last",
+
+    )
+
+ 
+
+    # [START howto_operator_bash]
+
+    run_this = BashOperator(
+
+        task_id="run_after_loop",
+
+        bash_command="echo 1",
+
+    )
+
+    # [END howto_operator_bash]
+
+ 
+
+    run_this >> run_this_last
+
+ 
+
+    for i in range(3):
+
+        task = BashOperator(
+
+            task_id="runme_" + str(i),
+
+            bash_command='echo "{{ task_instance_key_str }}" && sleep 1',
+
+        )
+
+        task >> run_this
+
+ 
+
+    # [START howto_operator_bash_template]
+
+    also_run_this = BashOperator(
+
+        task_id="also_run_this",
+
+        bash_command='echo "ti_key={{ task_instance_key_str }}"',
+
+    )
+
+    # [END howto_operator_bash_template]
+
+    also_run_this >> run_this_last
+
+ 
+
+# [START howto_operator_bash_skip]
+
+this_will_skip = BashOperator(
+
+    task_id="this_will_skip",
+
+    bash_command='echo "hello world"; exit 99;',
+
+    dag=dag,
+
+)
+
+# [END howto_operator_bash_skip]
+
+this_will_skip >> run_this_last
+
+ 
+
+if __name__ == "__main__":
+
+    dag.test()
